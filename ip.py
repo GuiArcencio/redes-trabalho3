@@ -30,8 +30,15 @@ class IP:
         else:
             # atua como roteador
             next_hop = self._next_hop(dst_addr)
-            # TODO: Trate corretamente o campo TTL do datagrama
-            self.enlace.enviar(datagrama, next_hop)
+            novo_ttl = ttl - 1
+            if novo_ttl > 0:
+                tam_cabecalho = len(datagrama) - len(payload)
+                datagrama = bytearray(datagrama)
+                datagrama[8:9] = struct.pack('!B', novo_ttl)
+                datagrama[10:12] = b'\x00\x00'
+                
+                novo_cabecalho = self._corrigir_checksum(bytes(datagrama[:tam_cabecalho]))
+                self.enlace.enviar(novo_cabecalho + payload, next_hop)
 
     def _next_hop(self, dest_addr):
         ip = self._ipaddr_para_bitstring(dest_addr)
@@ -98,10 +105,7 @@ class IP:
             src_addr,
             dest_addr
         )
-        header_checksum = calc_checksum(cabecalho)
-        cabecalho = bytearray(cabecalho)
-        cabecalho[10:12] = struct.pack('!H', header_checksum)
-        cabecalho = bytes(cabecalho)
+        cabecalho = self._corrigir_checksum(cabecalho)
 
         datagrama = cabecalho + segmento
         self.enlace.enviar(datagrama, next_hop)
@@ -118,6 +122,12 @@ class IP:
     def _ipaddr_para_bitstring(self, ipaddr: str):
         ip = int.from_bytes(ip_address(ipaddr).packed, 'big')
         return f'{ip:032b}'
+    
+    def _corrigir_checksum(self, cabecalho: bytes):
+        header_checksum = calc_checksum(cabecalho)
+        cabecalho = bytearray(cabecalho)
+        cabecalho[10:12] = struct.pack('!H', header_checksum)
+        return bytes(cabecalho)
 
 
 # Implementação de TRIE para a tabela de encaminhamento
