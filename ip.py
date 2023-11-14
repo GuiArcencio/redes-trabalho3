@@ -31,14 +31,26 @@ class IP:
             # atua como roteador
             next_hop = self._next_hop(dst_addr)
             novo_ttl = ttl - 1
+            tam_cabecalho = len(datagrama) - len(payload)
+
             if novo_ttl > 0:
-                tam_cabecalho = len(datagrama) - len(payload)
                 datagrama = bytearray(datagrama)
                 datagrama[8:9] = struct.pack('!B', novo_ttl)
                 datagrama[10:12] = b'\x00\x00'
-                
-                novo_cabecalho = self._corrigir_checksum(bytes(datagrama[:tam_cabecalho]))
+
+                novo_cabecalho = self._corrigir_checksum_ipv4(bytes(datagrama[:tam_cabecalho]))
                 self.enlace.enviar(novo_cabecalho + payload, next_hop)
+            else: # Time exceeded
+                cabecalho_icmp = self._montar_cabecalho_icmp(11, 0, 0)
+                segmento_retorno = cabecalho_icmp + datagrama[:(tam_cabecalho + 8)]
+                cabecalho_ipv4 = self._montar_cabecalho_ipv4(
+                    src_addr, 
+                    len(segmento_retorno),
+                    IPPROTO_ICMP,
+                    64
+                )
+                return_hop = self._next_hop(src_addr)
+                self.enlace.enviar(cabecalho_ipv4 + segmento_retorno, return_hop)
 
     def _next_hop(self, dest_addr):
         ip = self._ipaddr_para_bitstring(dest_addr)
@@ -92,20 +104,12 @@ class IP:
         src_addr = int.from_bytes(ip_address(self.meu_endereco).packed, 'big')
         dest_addr = int.from_bytes(ip_address(dest_addr).packed, 'big')
 
-        cabecalho = struct.pack(
-            '!BBHHHBBHII',
-            version__ihl,
-            dscp__ecn,
-            total_length,
-            identification,
-            flags__fragment_offset,
-            ttl,
-            protocol,
-            header_checksum,
-            src_addr,
-            dest_addr
+        cabecalho = self._montar_cabecalho_ipv4(
+            dest_addr,
+            len(segmento), 
+            IPPROTO_TCP,
+            64
         )
-        cabecalho = self._corrigir_checksum(cabecalho)
 
         datagrama = cabecalho + segmento
         self.enlace.enviar(datagrama, next_hop)
@@ -123,11 +127,52 @@ class IP:
         ip = int.from_bytes(ip_address(ipaddr).packed, 'big')
         return f'{ip:032b}'
     
-    def _corrigir_checksum(self, cabecalho: bytes):
+    def _corrigir_checksum_ipv4(self, cabecalho: bytes):
         header_checksum = calc_checksum(cabecalho)
         cabecalho = bytearray(cabecalho)
         cabecalho[10:12] = struct.pack('!H', header_checksum)
         return bytes(cabecalho)
+    
+    def _corrigir_checksum_icmp(self, cabecalho: bytes):
+        header_checksum = calc_checksum(cabecalho)
+        cabecalho = bytearray(cabecalho)
+        cabecalho[2:4] = struct.pack('!H', header_checksum)
+        return bytes(cabecalho)
+    
+    def _montar_cabecalho_ipv4(self, dest_addr, tam_payload, protocol, ttl=64):
+        version__ihl = (4 << 4) + 5
+        dscp__ecn = 0
+        total_length = 20 + tam_payload
+        identification = self.identification
+        flags__fragment_offset = 0
+        header_checksum = 0
+        src_addr = int.from_bytes(ip_address(self.meu_endereco).packed, 'big')
+        dest_addr = int.from_bytes(ip_address(dest_addr).packed, 'big')
+
+        cabecalho = struct.pack(
+            '!BBHHHBBHII',
+            version__ihl,
+            dscp__ecn,
+            total_length,
+            identification,
+            flags__fragment_offset,
+            ttl,
+            protocol,
+            header_checksum,
+            src_addr,
+            dest_addr
+        )
+        return self._corrigir_checksum_ipv4(cabecalho)
+    
+    def _montar_cabecalho_icmp(self, type, code, rest):
+        cabecalho = struct.pack(
+            '!BBHI',
+            type,
+            code,
+            0, # Checksum,
+            rest,
+        )
+        return self._corrigir_checksum_icmp(cabecalho)
 
 
 # Implementação de TRIE para a tabela de encaminhamento
