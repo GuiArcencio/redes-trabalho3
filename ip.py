@@ -1,7 +1,10 @@
 from __future__ import annotations
 from ipaddress import ip_address
+import struct
+from random import randint
 
 from grader.iputils import *
+from grader.tcputils import *
 
 class IP:
     def __init__(self, enlace):
@@ -15,6 +18,7 @@ class IP:
         self.enlace.registrar_recebedor(self.__raw_recv)
         self.ignore_checksum = self.enlace.ignore_checksum
         self.meu_endereco = None
+        self.identification = randint(0, 2**16 - 1)
 
     def __raw_recv(self, datagrama):
         dscp, ecn, identification, flags, frag_offset, ttl, proto, \
@@ -68,9 +72,40 @@ class IP:
         (string no formato x.y.z.w).
         """
         next_hop = self._next_hop(dest_addr)
-        # TODO: Assumindo que a camada superior é o protocolo TCP, monte o
-        # datagrama com o cabeçalho IP, contendo como payload o segmento.
+
+        # Montagem de cabeçalho
+        version__ihl = (4 << 4) + 5
+        dscp__ecn = 0
+        total_length = 20 + len(segmento)
+        identification = self.identification
+        flags__fragment_offset = 0
+        ttl = 64
+        protocol = IPPROTO_TCP
+        header_checksum = 0
+        src_addr = int.from_bytes(ip_address(self.meu_endereco).packed, 'big')
+        dest_addr = int.from_bytes(ip_address(dest_addr).packed, 'big')
+
+        cabecalho = struct.pack(
+            '!BBHHHBBHII',
+            version__ihl,
+            dscp__ecn,
+            total_length,
+            identification,
+            flags__fragment_offset,
+            ttl,
+            protocol,
+            header_checksum,
+            src_addr,
+            dest_addr
+        )
+        header_checksum = calc_checksum(cabecalho)
+        cabecalho = bytearray(cabecalho)
+        cabecalho[10:12] = struct.pack('!H', header_checksum)
+        cabecalho = bytes(cabecalho)
+
+        datagrama = cabecalho + segmento
         self.enlace.enviar(datagrama, next_hop)
+        self.identification = (self.identification + 1) % (2**16)
 
     def _cidr_para_bitstring(self, cidr: str):
         ip, bits = cidr.split('/')
